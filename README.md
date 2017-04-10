@@ -1,4 +1,4 @@
-# Compiled inference: learn proposal distributions for importance sampling and SMC
+# Learn proposal distributions for importance sampling and SMC
 
 This code provides a [PyTorch](http://pytorch.org/) implementation of the method described in [this paper](https://arxiv.org/abs/1602.06701) for training neural networks which can be used as proposal distributions for importance sampling or sequential Monte Carlo:
 
