@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.tensor as tensor
 import torch.nn.init as init
+import torch.nn.functional as F
 from torch.autograd import Variable
 
 import numpy as np
@@ -38,9 +39,9 @@ class MaskedLinear(nn.Linear):
     def forward(self, input):
         mask = Variable(self.mask, requires_grad=False)
         if self.bias is None:
-            return self._backend.Linear()(input, self.weight*mask)
+            return F.linear(input, self.weight*mask)
         else:
-            return self._backend.Linear()(input, self.weight*mask, self.bias)
+            return F.linear(input, self.weight*mask, self.bias)
 
 
 class AbstractConditionalMADE(nn.Module):
@@ -115,7 +116,7 @@ class ConditionalBinaryMADE(AbstractConditionalMADE):
         epsilon = 1e-8
         logp = self.p(h) + self.skip_p(x) + epsilon
         logq = self.q(h) + self.skip_q(x) + epsilon
-        A = torch.max(logp, logq)
+        A = torch.max(logp, logq, keepdim=True)
         normalizer = ((logp - A).exp_() + (logq - A).exp_()).log() + A
 #         assert (1 - np.isfinite(normalizer.data.numpy())).sum() == 0
         logp -= normalizer
@@ -184,8 +185,8 @@ class ConditionalRealValueMADE(AbstractConditionalMADE):
         sigma = [self.softplus(self.sigma[k](h) + self.skip_sigma[k](x)) for k in xrange(self.K)]
         
         alpha = torch.cat(map(lambda x: x.unsqueeze(2), log_alpha), 2)
-        A, _ = torch.max(alpha, 2)
-        tmp = torch.sum((alpha - A.expand(alpha.size())).exp_(), 2).log()
+        A, _ = torch.max(alpha, 2, keepdim=True)
+        tmp = torch.sum((alpha - A.expand(alpha.size())).exp_(), 2, keepdim=True).log()
         log_normalizer = tmp + A
         alpha = (alpha - log_normalizer.expand(alpha.size())).exp_()
         mu = torch.cat(map(lambda x: x.unsqueeze(2), mu), 2)
@@ -220,11 +221,12 @@ class ConditionalRealValueMADE(AbstractConditionalMADE):
         for d in xrange(self.D_out):
             full_input = torch.cat((parents, latent), 1)
             alpha, mu, sigma = self(full_input)
-            _, z = torch.max(alpha.log() + gumbel, 2)
+            _, z = torch.max(alpha.log() + gumbel, 2, keepdim=False)
             one_hot = torch.zeros(alpha.size())
             if parents.is_cuda: one_hot = one_hot.cuda()
-            one_hot = one_hot.scatter_(2, z.data, 1).squeeze_().byte()
-            latent = Variable(randvals.data * sigma.data[one_hot].view(z.size()) + mu.data[one_hot].view(z.size()))
+            one_hot = one_hot.scatter_(2, z.data.unsqueeze(-1), 1).squeeze_().byte()
+            tmp = randvals.data * sigma.data[one_hot].view(z.size()) 
+            latent = Variable(tmp + mu.data[one_hot].view(z.size()))
         if ns > 1:
             latent = latent.resize(ns, original_batch_size, self.D_out)
         return latent
@@ -242,6 +244,6 @@ class ConditionalRealValueMADE(AbstractConditionalMADE):
 #         print "norm", normpdfs, normpdfs.sum()
 #         print "alph", alpha.log(), alpha.log().sum()
         # need to do log-sum-exp along dimension 2
-        A, _ = torch.max(lw, 2)
-        weighted_normal = (torch.sum((lw - A.expand(lw.size())).exp(), 2).log() + A).squeeze(2)
-        return torch.sum(weighted_normal, 1)
+        A, _ = torch.max(lw, 2, keepdim=True)
+        weighted_normal = (torch.sum((lw - A.expand(lw.size())).exp(), 2, keepdim=True).log() + A).squeeze(2)
+        return torch.sum(weighted_normal, 1, keepdim=True)
